@@ -1,0 +1,12 @@
+.DS_Store
+exports/
+canvas/
+outputs/
+
+# Local design experiments not part of the EverWell prototype app.
+122-*.html
+122-*.svg
+frame-*.html
+frame-*.svg
+side-*.html
+side-*.svg
