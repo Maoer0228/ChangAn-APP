@@ -794,6 +794,13 @@
       transform: scale(.98);
     }
 
+    .btn:disabled,
+    .pill:disabled {
+      cursor: not-allowed;
+      opacity: .58;
+      transform: none;
+    }
+
     .btn.primary {
       min-height: 44px;
       color: #fff;
@@ -2333,6 +2340,16 @@
       background: var(--brand);
     }
 
+    .chat-message.thinking {
+      width: fit-content;
+      min-width: 120px;
+      color: var(--text-2);
+      background: rgba(255, 255, 255, .78);
+      border: 1px solid rgba(255, 255, 255, .76);
+      box-shadow: 0 14px 30px rgba(54, 102, 254, .10);
+      backdrop-filter: blur(18px);
+    }
+
     .chat-message-text {
       min-width: 0;
       line-height: 1.52;
@@ -2340,9 +2357,77 @@
       word-break: break-word;
     }
 
+    .ai-thinking {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 720;
+    }
+
+    .ai-thinking-dots {
+      display: inline-flex;
+      gap: 3px;
+      align-items: center;
+    }
+
+    .ai-thinking-dots span {
+      width: 5px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--brand);
+      opacity: .38;
+      animation: thinkingDot 1s ease-in-out infinite;
+    }
+
+    .ai-thinking-dots span:nth-child(2) {
+      animation-delay: .14s;
+    }
+
+    .ai-thinking-dots span:nth-child(3) {
+      animation-delay: .28s;
+    }
+
+    .typing-caret::after {
+      content: '';
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      margin-left: 2px;
+      vertical-align: -.16em;
+      border-radius: 999px;
+      background: var(--brand);
+      animation: caretBlink .72s steps(2, start) infinite;
+    }
+
     .ai-data-number {
       color: #DC2626;
       font-weight: 850;
+    }
+
+    @keyframes thinkingDot {
+      0%,
+      80%,
+      100% {
+        opacity: .32;
+        transform: translateY(0);
+      }
+
+      40% {
+        opacity: 1;
+        transform: translateY(-3px);
+      }
+    }
+
+    @keyframes caretBlink {
+      0%,
+      45% {
+        opacity: 1;
+      }
+
+      46%,
+      100% {
+        opacity: 0;
+      }
     }
 
     .chat-composer {
@@ -3894,6 +3979,8 @@
       aiMessages: [
         { role: 'assistant', text: (COMPANIONS[localStorage.getItem(COMPANION_KEY)] || COMPANIONS.xiaochang).greeting }
       ],
+      aiBusy: false,
+      aiInteractionToken: 0,
       profile: {
         username: localStorage.getItem(PROFILE_NAME_KEY) || '健康用户',
         phone: localStorage.getItem(PROFILE_PHONE_KEY) || '',
@@ -4074,8 +4161,12 @@
       if (!COMPANIONS[id]) return;
       state.companionId = id;
       localStorage.setItem(COMPANION_KEY, id);
+      state.aiInteractionToken += 1;
+      state.aiBusy = false;
       if (state.aiMessages.length === 1 && state.aiMessages[0].role === 'assistant') {
         state.aiMessages[0].text = currentCompanion().greeting;
+        state.aiMessages[0].status = 'done';
+        state.aiMessages[0].displayText = currentCompanion().greeting;
       }
       renderAll();
       showToast(`已切换为${currentCompanion().name}`);
@@ -4774,17 +4865,52 @@
       return escapeHtml(text).replace(/\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?%?/g, match => `<span class="ai-data-number">${match}</span>`);
     }
 
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function scrollChatToBottom() {
+      const scroll = $('.ai-scroll');
+      if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    }
+
+    function getAIReplyTiming(text) {
+      const length = String(text || '').length;
+      const thinking = Math.min(820, Math.max(480, Math.round(length * 1.4)));
+      const typingBase = Math.min(3200, Math.max(1300, Math.round(length * 13)));
+      const typing = Math.min(typingBase, Math.max(1000, 3900 - thinking));
+      return { thinking, typing };
+    }
+
+    function setAIControlsDisabled(disabled) {
+      $$('[data-ai-prompt]').forEach(btn => {
+        btn.disabled = disabled;
+        btn.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+      });
+      const sendBtn = $('[data-send-ai]');
+      if (sendBtn) sendBtn.disabled = disabled;
+      const input = $('#aiInput');
+      if (input) input.setAttribute('aria-busy', disabled ? 'true' : 'false');
+    }
+
     function renderAI() {
       $('#aiSummaryText').textContent = generateAdviceText();
       $('#chatList').innerHTML = state.aiMessages.map(message => {
         const isUser = message.role === 'user';
-        const content = isUser ? escapeHtml(message.text) : highlightAIDataNumbers(message.text);
+        const isThinking = message.status === 'thinking';
+        const isTyping = message.status === 'typing';
+        const rawText = isTyping ? (message.displayText || '') : message.text;
+        const content = isThinking
+          ? `<span class="ai-thinking">AI 正在思考<span class="ai-thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span></span>`
+          : isUser ? escapeHtml(rawText) : highlightAIDataNumbers(rawText);
         return `
-        <div class="chat-message ${isUser ? 'user' : 'assistant'}">
-          <div class="chat-message-text">${content}</div>
+        <div class="chat-message ${isUser ? 'user' : 'assistant'} ${isThinking ? 'thinking' : ''}">
+          <div class="chat-message-text ${isTyping ? 'typing-caret' : ''}">${content}</div>
         </div>
       `;
       }).join('');
+      setAIControlsDisabled(state.aiBusy);
+      requestAnimationFrame(scrollChatToBottom);
     }
 
     function renderProfile() {
@@ -5187,15 +5313,49 @@ ${generateReportAdvice(summary).map((item, index) => `${index + 1}. ${item}`).jo
 如果你愿意，可以继续问我“今天完成情况怎么样”“帮我看一下喝水进度”“本周有什么需要注意”。我会尽量用记录帮你拆成更容易执行的小步骤。`;
     }
 
-    function sendAIMessage(prompt) {
+    async function sendAIMessage(prompt) {
       const text = String(prompt || $('#aiInput')?.value || '').trim();
       if (!text) {
         showToast('请输入问题');
         return;
       }
+      if (state.aiBusy) {
+        showToast('AI 正在思考，请稍等');
+        return;
+      }
+      const reply = buildAIReply(text);
+      const token = state.aiInteractionToken + 1;
+      const assistantMessage = { role: 'assistant', text: '', displayText: '', status: 'thinking' };
+      state.aiInteractionToken = token;
+      state.aiBusy = true;
       state.aiMessages.push({ role: 'user', text });
-      state.aiMessages.push({ role: 'assistant', text: buildAIReply(text) });
+      state.aiMessages.push(assistantMessage);
       if ($('#aiInput')) $('#aiInput').value = '';
+      renderAI();
+
+      const timing = getAIReplyTiming(reply);
+      await sleep(timing.thinking);
+      if (state.aiInteractionToken !== token) return;
+
+      assistantMessage.text = reply;
+      assistantMessage.status = 'typing';
+      assistantMessage.displayText = '';
+      renderAI();
+
+      const stepMs = 38;
+      const steps = Math.max(1, Math.ceil(timing.typing / stepMs));
+      const charsPerStep = Math.max(1, Math.ceil(reply.length / steps));
+      for (let index = 0; index < reply.length; index += charsPerStep) {
+        if (state.aiInteractionToken !== token) return;
+        assistantMessage.displayText = reply.slice(0, Math.min(index + charsPerStep, reply.length));
+        renderAI();
+        if (assistantMessage.displayText.length < reply.length) await sleep(stepMs);
+      }
+
+      if (state.aiInteractionToken !== token) return;
+      assistantMessage.displayText = reply;
+      assistantMessage.status = 'done';
+      state.aiBusy = false;
       renderAI();
     }
 
@@ -6213,8 +6373,10 @@ ${generateReportAdvice(summary).map((item, index) => `${index + 1}. ${item}`).jo
         if (event.target.closest('[data-send-ai]')) sendAIMessage();
 
         if (event.target.closest('[data-ai-reset]')) {
+          state.aiInteractionToken += 1;
+          state.aiBusy = false;
           state.aiMessages = [
-            { role: 'assistant', text: `${currentCompanion().name}已准备好继续陪你。你可以问我今日完成情况、喝水进度、周报重点或疑似漏服说明。` }
+            { role: 'assistant', text: `${currentCompanion().name}已准备好继续陪你。你可以问我今日完成情况、喝水进度、周报重点或疑似漏服说明。`, status: 'done' }
           ];
           renderAI();
           showToast('AI 对话已重置');
